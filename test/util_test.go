@@ -91,7 +91,7 @@ func init() {
 		"Comma-separated key=value labels to apply to the generic gang scheduling Job (e.g. kueue.x-k8s.io/queue-name=e2e-lq).")
 	gangNegativeWindow = flag.Duration("gang-negative-window", 30*time.Second,
 		"Duration to observe the negative gang scheduling test job to verify no pods are partially scheduled.")
-	gangSchedulerName = flag.String("gang-scheduler-name", "",
+	gangSchedulerName = flag.String("gang-scheduler-name", "kueue",
 		"Name of the gang scheduler being tested (currently supports: 'kueue' or 'volcano'). Used to apply adapter logic if required.")
 }
 
