@@ -268,10 +268,10 @@ func buildResourceList(cpuReq, memReq string) corev1.ResourceList {
 }
 
 func applyGangSchedulerAdapter(ctx context.Context, t *testing.T, dynamicClient dynamic.Interface, job *batchv1.Job) error {
+	t.Helper()
 	switch *gangSchedulerName {
 	case "volcano":
-		applyVolcanoAdapter(ctx, t, dynamicClient, job)
-		return nil
+		return applyVolcanoAdapter(ctx, t, dynamicClient, job)
 	case "kueue":
 		// Kueue handles gang scheduling automatically via annotations/labels, no extra API resources needed here.
 		return nil
@@ -280,7 +280,8 @@ func applyGangSchedulerAdapter(ctx context.Context, t *testing.T, dynamicClient 
 	}
 }
 
-func applyVolcanoAdapter(ctx context.Context, t *testing.T, dynamicClient dynamic.Interface, job *batchv1.Job) {
+func applyVolcanoAdapter(ctx context.Context, t *testing.T, dynamicClient dynamic.Interface, job *batchv1.Job) error {
+	t.Helper()
 	t.Logf("Applying Volcano adapter for job %s...", job.Name)
 
 	// 1. Mutate Job
@@ -319,7 +320,7 @@ func applyVolcanoAdapter(ctx context.Context, t *testing.T, dynamicClient dynami
 	}
 
 	if _, err := dynamicClient.Resource(gvr).Namespace(job.Namespace).Create(ctx, podGroup, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("Failed to create Volcano PodGroup for job %s: %v", job.Name, err)
+		return fmt.Errorf("failed to create Volcano PodGroup for job %s: %w", job.Name, err)
 	}
 
 	t.Cleanup(func() {
@@ -329,4 +330,6 @@ func applyVolcanoAdapter(ctx context.Context, t *testing.T, dynamicClient dynami
 			t.Logf("Failed to clean up Volcano PodGroup %s: %v", job.Name, err)
 		}
 	})
+	return nil
 }
+

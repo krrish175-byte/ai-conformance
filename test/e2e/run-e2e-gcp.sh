@@ -256,7 +256,7 @@ kubectl get nodes -o wide
 REMOTE_SCRIPT
 
 echo "================================================================"
-echo "3. Deploying Cluster Prerequisites (NVIDIA DRA Driver & Kueue)"
+echo "3. Deploying Cluster Prerequisites (NVIDIA DRA Driver & Gang Scheduler)"
 echo "================================================================"
 gcloud compute ssh "${VM_NAME}" --project="${GCP_PROJECT}" --zone="${GCE_ZONE}" --command="bash -s" <<REMOTE_STACK
 set -euo pipefail
