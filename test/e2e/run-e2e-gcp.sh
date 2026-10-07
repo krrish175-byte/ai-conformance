@@ -281,9 +281,21 @@ for setup in test/e2e/setup.d/*.sh; do
   bash "\${setup}"
 done
 
+echo "Installing DCGM Exporter..."
+helm repo add gpu-helm-charts https://nvidia.github.io/dcgm-exporter/helm-charts
+helm repo update
+helm upgrade -i dcgm-exporter gpu-helm-charts/dcgm-exporter \
+    --namespace gpu-operator \
+    --create-namespace \
+    --wait --timeout 5m
+
+echo "Waiting for DCGM Exporter DaemonSet to be ready..."
+kubectl rollout status daemonset -n gpu-operator dcgm-exporter --timeout=5m
+
+printf '%s\n' -metrics-namespace=gpu-operator -metrics-service-name=dcgm-exporter >> "\${E2E_TEST_ARGS_FILE}"
+
 echo "go test flags added by setup.d:"
 cat "\${E2E_TEST_ARGS_FILE}"
-REMOTE_STACK
 
 echo "================================================================"
 echo "4. Executing AI Conformance Test Suite (test/)"

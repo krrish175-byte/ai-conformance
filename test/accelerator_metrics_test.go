@@ -19,23 +19,33 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
-	"net/http"
+	"math"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
-	"time"
+
+	"k8s.io/client-go/kubernetes"
 )
 
 var (
-	metricsEndpoint          *string
+	metricsNamespace         *string
+	metricsServiceName       *string
+	metricsServicePort       *string
 	metricsUtilizationMetric *string
 	metricsMemoryMetric      *string
 )
 
 func init() {
-	metricsEndpoint = flag.String("metrics-endpoint", "",
-		"Prometheus-compatible metrics endpoint URL exposed by the accelerator metrics solution "+
-			"(e.g. http://node-ip:9400/metrics). If empty, TestAcceleratorPerformanceMetrics is skipped.")
+	registerFlagGroup("metrics", "Accelerator Performance Metrics Flags (TestAcceleratorPerformanceMetrics)")
+	metricsNamespace = flag.String("metrics-namespace", "",
+		"Namespace where the accelerator metrics exporter Service lives "+
+			"(e.g. gpu-operator). If empty, TestAcceleratorPerformanceMetrics is skipped.")
+	metricsServiceName = flag.String("metrics-service-name", "",
+		"Name of the Kubernetes Service that fronts the accelerator metrics exporter "+
+			"(e.g. dcgm-exporter). If empty, TestAcceleratorPerformanceMetrics is skipped.")
+	metricsServicePort = flag.String("metrics-service-port", "9400",
+		"Port (name or number) on the metrics exporter Service to proxy to.")
 	metricsUtilizationMetric = flag.String("metrics-utilization-metric", "",
 		"Exact Prometheus metric name for per-accelerator GPU utilization "+
 			"(e.g. DCGM_FI_DEV_GPU_UTIL). If empty, auto-detected by name pattern.")
@@ -43,9 +53,6 @@ func init() {
 		"Exact Prometheus metric name for per-accelerator memory usage "+
 			"(e.g. DCGM_FI_DEV_FB_USED). If empty, auto-detected by name pattern.")
 }
-
-// 30 s bounds a single scrape independent of the parent test context deadline.
-var metricsHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 var deviceLabelKeys = []string{
 	"gpu",          // NVIDIA DCGM integer device index
@@ -59,9 +66,9 @@ var deviceLabelKeys = []string{
 	"pci_bus_id",   // PCI bus identifier
 }
 
-var utilizationNamePatterns = []string{"util", "utilization"}
+var utilizationNamePatterns = []string{"util"}
 
-var memoryNamePatterns = []string{"mem", "memory", "fb", "vram", "hbm"}
+var memoryNamePatterns = []string{"fb_used", "mem_used", "memory_used", "vram_used", "hbm_used"}
 
 // TestAcceleratorPerformanceMetrics verifies KAR-0059: Accelerator Performance Metrics.
 // Ref: https://github.com/kubernetes-sigs/ai-conformance/blob/main/kars/0059-accelerator-performance-metrics/README.md
@@ -69,51 +76,54 @@ func TestAcceleratorPerformanceMetrics(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping cluster E2E test in short mode")
 	}
-	if *metricsEndpoint == "" {
-		t.Skip("Skipping TestAcceleratorPerformanceMetrics: -metrics-endpoint not set")
+	if *metricsNamespace == "" || *metricsServiceName == "" {
+		t.Skip("accelerator metrics test is not configured; if the platform does not expose per-accelerator metrics, mark accelerator_performance_metrics N/A, otherwise set -metrics-namespace and -metrics-service-name")
 	}
 
 	ctx := context.Background()
+	client := getClientset(t)
+
+	metrics, err := scrapeMetrics(ctx, client)
+	if err != nil {
+		t.Fatalf("FAIL: Failed to scrape metrics from %s/%s:%s: %v",
+			*metricsNamespace, *metricsServiceName, *metricsServicePort, err)
+	}
 
 	t.Run("MetricsEndpointReachable", func(t *testing.T) {
-		testMetricsEndpointReachable(ctx, t)
+		testMetricsEndpointReachable(t, metrics)
 	})
 
 	t.Run("PerAcceleratorUtilizationMetric", func(t *testing.T) {
-		testPerAcceleratorMetric(ctx, t, "utilization", *metricsUtilizationMetric, utilizationNamePatterns)
+		testPerAcceleratorMetric(t, "utilization", *metricsUtilizationMetric, utilizationNamePatterns, metrics)
 	})
 
 	t.Run("PerAcceleratorMemoryMetric", func(t *testing.T) {
-		testPerAcceleratorMetric(ctx, t, "memory", *metricsMemoryMetric, memoryNamePatterns)
+		testPerAcceleratorMetric(t, "memory", *metricsMemoryMetric, memoryNamePatterns, metrics)
 	})
 
 	t.Run("OptionalMetrics", func(t *testing.T) {
-		testOptionalMetrics(ctx, t)
+		testOptionalMetrics(t, metrics)
 	})
 }
 
-func testMetricsEndpointReachable(ctx context.Context, t *testing.T) {
-	metrics, err := scrapeMetrics(ctx, *metricsEndpoint)
-	if err != nil {
-		t.Fatalf("FAIL: Metrics endpoint %s is not reachable: %v", *metricsEndpoint, err)
+func testMetricsEndpointReachable(t *testing.T, metrics []prometheusMetric) {
+	t.Helper()
+	if len(metrics) == 0 {
+		t.Fatalf("FAIL: Metrics endpoint %s/%s returned no metrics", *metricsNamespace, *metricsServiceName)
 	}
-	t.Logf("PASS: Metrics endpoint %s returned %d metric samples", *metricsEndpoint, len(metrics))
+	t.Logf("PASS: Metrics endpoint %s/%s returned %d metric samples", *metricsNamespace, *metricsServiceName, len(metrics))
 }
 
-func testPerAcceleratorMetric(ctx context.Context, t *testing.T, kind, exactName string, patterns []string) {
-	metrics, err := scrapeMetrics(ctx, *metricsEndpoint)
-	if err != nil {
-		t.Fatalf("FAIL: Failed to scrape metrics endpoint: %v", err)
-	}
-
+func testPerAcceleratorMetric(t *testing.T, kind, exactName string, patterns []string, metrics []prometheusMetric) {
+	t.Helper()
 	found := findPerAcceleratorMetrics(metrics, exactName, patterns)
 	if len(found) == 0 {
 		if exactName != "" {
-			t.Errorf("FAIL: Metric %q not found or carries no device label at %s", exactName, *metricsEndpoint)
+			t.Errorf("FAIL: Metric %q not found or carries no device label", exactName)
 		} else {
-			t.Errorf("FAIL: No per-accelerator %s metric found at %s "+
+			t.Errorf("FAIL: No per-accelerator %s metric found "+
 				"(expected a metric whose name matches %v and carries a device label key from %v)",
-				kind, *metricsEndpoint, patterns, deviceLabelKeys)
+				kind, patterns, deviceLabelKeys)
 		}
 		return
 	}
@@ -126,15 +136,12 @@ func testPerAcceleratorMetric(ctx context.Context, t *testing.T, kind, exactName
 	for n := range seen {
 		names = append(names, n)
 	}
+	sort.Strings(names)
 	t.Logf("PASS: Found per-accelerator %s metric(s): %v (%d samples)", kind, names, len(found))
 }
 
-func testOptionalMetrics(ctx context.Context, t *testing.T) {
-	metrics, err := scrapeMetrics(ctx, *metricsEndpoint)
-	if err != nil {
-		t.Fatalf("FAIL: Failed to scrape metrics endpoint: %v", err)
-	}
-
+func testOptionalMetrics(t *testing.T, metrics []prometheusMetric) {
+	t.Helper()
 	shouldChecks := []struct {
 		kind     string
 		patterns []string
@@ -154,22 +161,16 @@ func testOptionalMetrics(ctx context.Context, t *testing.T) {
 	}
 }
 
-func scrapeMetrics(ctx context.Context, url string) ([]prometheusMetric, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// scrapeMetrics fetches /metrics from the exporter Service via the Kubernetes
+// API server proxy, avoiding any requirement for host-routable access to
+// in-cluster Services.
+func scrapeMetrics(ctx context.Context, client kubernetes.Interface) ([]prometheusMetric, error) {
+	body, err := client.CoreV1().Services(*metricsNamespace).ProxyGet(
+		"http", *metricsServiceName, *metricsServicePort, "/metrics", nil,
+	).DoRaw(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build request: %w", err)
-	}
-	resp, err := metricsHTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP GET failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("metrics endpoint returned HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf("proxy to metrics service %s/%s:%s: %w",
+			*metricsNamespace, *metricsServiceName, *metricsServicePort, err)
 	}
 	return parsePrometheusText(string(body)), nil
 }
@@ -177,6 +178,7 @@ func scrapeMetrics(ctx context.Context, url string) ([]prometheusMetric, error) 
 type prometheusMetric struct {
 	name   string
 	labels map[string]string
+	value  float64
 }
 
 func parsePrometheusText(body string) []prometheusMetric {
@@ -198,7 +200,7 @@ func parsePrometheusLine(line string) (prometheusMetric, bool) {
 	braceOpen := strings.IndexByte(line, '{')
 	spaceIdx := strings.IndexByte(line, ' ')
 
-	var name, labelsStr string
+	var name, labelsStr, rest string
 
 	if braceOpen != -1 && (spaceIdx == -1 || braceOpen < spaceIdx) {
 		name = line[:braceOpen]
@@ -207,8 +209,10 @@ func parsePrometheusLine(line string) (prometheusMetric, bool) {
 			return prometheusMetric{}, false
 		}
 		labelsStr = line[braceOpen+1 : braceClose]
+		rest = strings.TrimSpace(line[braceClose+1:])
 	} else if spaceIdx != -1 {
 		name = line[:spaceIdx]
+		rest = strings.TrimSpace(line[spaceIdx+1:])
 	} else {
 		return prometheusMetric{}, false
 	}
@@ -217,9 +221,21 @@ func parsePrometheusLine(line string) (prometheusMetric, bool) {
 	if name == "" {
 		return prometheusMetric{}, false
 	}
+
+	// Extract the numeric value (first field; optional timestamp follows).
+	parts := strings.Fields(rest)
+	if len(parts) == 0 {
+		return prometheusMetric{}, false
+	}
+	v, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil || math.IsNaN(v) {
+		return prometheusMetric{}, false
+	}
+
 	return prometheusMetric{
 		name:   name,
 		labels: parsePrometheusLabels(labelsStr),
+		value:  v,
 	}, true
 }
 
@@ -238,7 +254,7 @@ func parsePrometheusLabels(s string) map[string]string {
 		if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
 			val = val[1 : len(val)-1]
 		}
-		if key != "" {
+		if key != "" && strings.TrimSpace(val) != "" {
 			labels[key] = val
 		}
 	}

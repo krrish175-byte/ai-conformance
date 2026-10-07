@@ -46,6 +46,20 @@ Scale-up and scale-down can take significantly longer than Go's default test tim
 
 Run `go test ./test -args -help` for details on all supported flags.
 
+### Accelerator Performance Metrics
+
+The performance metrics test connects to the Kubernetes cluster via the configured kubeconfig and scrapes the accelerator metrics exporter's `/metrics` endpoint through the Kubernetes API server proxy, so no host-routable access to in-cluster Services is required.
+
+The test is **skipped by default** if `-metrics-namespace` or `-metrics-service-name` is unset. If your platform provides accelerator metrics via a Prometheus-compatible endpoint, you must set at least:
+
+- `-metrics-namespace`: Kubernetes namespace where the exporter Service lives (e.g. `gpu-operator`).
+- `-metrics-service-name`: Name of the Kubernetes Service for the exporter (e.g. `dcgm-exporter`).
+- `-metrics-service-port`: Port to proxy to (default `9400`).
+
+If your platform does not expose per-accelerator metrics at all, mark `accelerator_performance_metrics` N/A.
+
+Run `go test ./test -args -help` for details on all supported flags.
+
 ## Vendor Customization & Neutrality
 
 The tests are designed to be vendor-neutral where possible, but hardware-level probing often requires vendor-specific configuration. If your platform uses different hardware/software not covered by the tests, please file an issue to request support for your hardware/software. In the meantime, you will need to certify manually.

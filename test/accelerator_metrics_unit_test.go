@@ -155,6 +155,67 @@ func TestHasDeviceLabel(t *testing.T) {
 	}
 }
 
+func TestParsePrometheusLineValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		line  string
+		valid bool
+		value float64
+	}{
+		{
+			name:  "valid integer value",
+			line:  `metric_name{gpu="0"} 42`,
+			valid: true,
+			value: 42,
+		},
+		{
+			name:  "valid float value",
+			line:  `metric_name{gpu="0"} 0.5`,
+			valid: true,
+			value: 0.5,
+		},
+		{
+			name:  "value with timestamp accepted",
+			line:  `metric_name{gpu="0"} 1.5 1234567890`,
+			valid: true,
+			value: 1.5,
+		},
+		{
+			name:  "NaN value rejected",
+			line:  `metric_name{gpu="0"} NaN`,
+			valid: false,
+		},
+		{
+			name:  "missing value rejected",
+			line:  `metric_name{gpu="0"}`,
+			valid: false,
+		},
+		{
+			name:  "no labels missing value rejected",
+			line:  `metric_name`,
+			valid: false,
+		},
+		{
+			name:  "malformed value rejected",
+			line:  `metric_name{gpu="0"} not-a-number`,
+			valid: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, ok := parsePrometheusLine(tt.line)
+			if ok != tt.valid {
+				t.Errorf("parsePrometheusLine(%q): valid=%v, want %v", tt.line, ok, tt.valid)
+				return
+			}
+			if tt.valid && m.value != tt.value {
+				t.Errorf("parsePrometheusLine(%q): value=%v, want %v", tt.line, m.value, tt.value)
+			}
+		})
+	}
+}
+
 func TestFindPerAcceleratorMetrics(t *testing.T) {
 	metrics := []prometheusMetric{
 		{name: "DCGM_FI_DEV_GPU_UTIL", labels: map[string]string{"gpu": "0", "UUID": "GPU-abc"}},
