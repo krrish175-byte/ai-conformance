@@ -297,6 +297,7 @@ fi
 
 echo "go test flags added by setup.d:"
 cat "\${E2E_TEST_ARGS_FILE}"
+REMOTE_STACK
 
 echo "================================================================"
 echo "4. Executing AI Conformance Test Suite (test/)"
