@@ -66,7 +66,7 @@ var deviceLabelKeys = []string{
 	"pci_bus_id",   // PCI bus identifier
 }
 
-var utilizationNamePatterns = []string{"util"}
+var utilizationNamePatterns = []string{"gpu_util"}
 
 var memoryNamePatterns = []string{"fb_used", "mem_used", "memory_used", "vram_used", "hbm_used"}
 
@@ -77,7 +77,7 @@ func TestAcceleratorPerformanceMetrics(t *testing.T) {
 		t.Skip("Skipping cluster E2E test in short mode")
 	}
 	if *metricsNamespace == "" || *metricsServiceName == "" {
-		t.Skip("accelerator metrics test is not configured; if the platform does not expose per-accelerator metrics, mark accelerator_performance_metrics N/A, otherwise set -metrics-namespace and -metrics-service-name")
+		t.Skip("accelerator metrics test is not configured; if your platform does not expose per-accelerator metrics, mark accelerator_metrics N/A, otherwise set -metrics-namespace and -metrics-service-name")
 	}
 
 	ctx := context.Background()
