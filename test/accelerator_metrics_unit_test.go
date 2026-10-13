@@ -112,22 +112,6 @@ func TestHasDeviceLabel(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "AMD ROCm metric with card_id label",
-			metric: prometheusMetric{
-				name:   "rocm_gpu_utilization",
-				labels: map[string]string{"card_id": "0", "serial_number": "abc"},
-			},
-			want: true,
-		},
-		{
-			name: "Intel XPU Manager metric with dev_id label",
-			metric: prometheusMetric{
-				name:   "xpum_gpu_utilization",
-				labels: map[string]string{"dev_id": "0"},
-			},
-			want: true,
-		},
-		{
 			name: "go runtime metric with no device label",
 			metric: prometheusMetric{
 				name:   "go_goroutines",

@@ -17,15 +17,23 @@
 set -o errexit -o nounset -o pipefail
 
 DCGM_EXPORTER_NAMESPACE="${DCGM_EXPORTER_NAMESPACE:-dcgm-exporter}"
+DCGM_EXPORTER_CHART_VERSION="${DCGM_EXPORTER_CHART_VERSION:-3.3.9}"
 
-echo "Installing DCGM Exporter..."
+echo "Installing DCGM Exporter ${DCGM_EXPORTER_CHART_VERSION}..."
 helm repo add gpu-helm-charts https://nvidia.github.io/dcgm-exporter/helm-charts
 helm repo update
 
+# runtimeClassName=nvidia: required for the exporter to see GPUs on nvkind, where
+# the NVIDIA runtime is only configured on GPU nodes via the nvidia RuntimeClass.
+# tolerations={}: clears the chart's default control-plane tolerations so the
+# DaemonSet only lands on worker GPU nodes.
 helm upgrade -i dcgm-exporter gpu-helm-charts/dcgm-exporter \
     --namespace "${DCGM_EXPORTER_NAMESPACE}" \
     --create-namespace \
+    --version "${DCGM_EXPORTER_CHART_VERSION}" \
     --set serviceMonitor.enabled=false \
+    --set runtimeClassName=nvidia \
+    --set 'tolerations={}' \
     --wait --timeout 10m
 
 printf '%s\n' \

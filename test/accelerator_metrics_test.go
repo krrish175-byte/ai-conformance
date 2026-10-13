@@ -54,13 +54,12 @@ func init() {
 			"(e.g. DCGM_FI_DEV_FB_USED). If empty, auto-detected by name pattern.")
 }
 
+// deviceLabelKeys covers NVIDIA DCGM label shapes; AMD/Intel support is a follow-up.
 var deviceLabelKeys = []string{
 	"gpu",          // NVIDIA DCGM integer device index
 	"UUID",         // NVIDIA DCGM GPU UUID
 	"uuid",         // lowercase UUID variant
 	"device_id",    // generic device identifier
-	"dev_id",       // Intel XPU Manager
-	"card_id",      // AMD ROCm SMI exporter
 	"GPU_I_ID",     // NVIDIA DCGM GPU instance ID (MIG)
 	"minor_number", // Linux device minor number
 	"pci_bus_id",   // PCI bus identifier
@@ -77,7 +76,7 @@ func TestAcceleratorPerformanceMetrics(t *testing.T) {
 		t.Skip("Skipping cluster E2E test in short mode")
 	}
 	if *metricsNamespace == "" || *metricsServiceName == "" {
-		t.Skip("accelerator metrics test is not configured; if your platform does not expose per-accelerator metrics, mark accelerator_metrics N/A, otherwise set -metrics-namespace and -metrics-service-name")
+		t.Skip("accelerator metrics test is not configured; if the platform does not expose per-accelerator metrics, mark accelerator_metrics N/A, otherwise set -metrics-namespace=<namespace> -metrics-service-name=<name>")
 	}
 
 	ctx := context.Background()

@@ -56,7 +56,7 @@ The test is **skipped by default** if `-metrics-namespace` or `-metrics-service-
 - `-metrics-service-name`: Name of the Kubernetes Service for the exporter (e.g. `dcgm-exporter`).
 - `-metrics-service-port`: Port to proxy to (default `9400`).
 
-If your platform does not expose per-accelerator metrics at all, mark `accelerator_performance_metrics` N/A.
+If your platform does not expose per-accelerator metrics at all, mark `accelerator_metrics` N/A.
 
 Run `go test ./test -args -help` for details on all supported flags.
 
