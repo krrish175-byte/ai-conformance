@@ -33,7 +33,7 @@ helm upgrade -i dcgm-exporter gpu-helm-charts/dcgm-exporter \
     --version "${DCGM_EXPORTER_CHART_VERSION}" \
     --set serviceMonitor.enabled=false \
     --set runtimeClassName=nvidia \
-    --set 'tolerations={}' \
+    --set-json 'tolerations=[]' \
     --wait --timeout 10m
 
 printf '%s\n' \
