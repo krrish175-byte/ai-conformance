@@ -17,7 +17,7 @@
 set -o errexit -o nounset -o pipefail
 
 DCGM_EXPORTER_NAMESPACE="${DCGM_EXPORTER_NAMESPACE:-dcgm-exporter}"
-DCGM_EXPORTER_CHART_VERSION="${DCGM_EXPORTER_CHART_VERSION:-3.3.7}"
+DCGM_EXPORTER_CHART_VERSION="${DCGM_EXPORTER_CHART_VERSION:-3.6.1}"
 
 echo "Installing DCGM Exporter ${DCGM_EXPORTER_CHART_VERSION}..."
 helm repo add gpu-helm-charts https://nvidia.github.io/dcgm-exporter/helm-charts
