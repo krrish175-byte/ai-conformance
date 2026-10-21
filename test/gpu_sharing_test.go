@@ -20,18 +20,10 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// GPU sharing mechanisms exercised by TestGPUSharing.
 const (
-	gpuSharingModeAuto = "auto"
-	// gpuSharingModeDRASharedClaim shares one allocated device between Pods
-	// by referencing a single ResourceClaim from all of them (DRA static
-	// sharing).
+	gpuSharingModeAuto           = "auto"
 	gpuSharingModeDRASharedClaim = "dra-shared-claim"
-	// gpuSharingModeDevicePlugin requests a shared or fractional extended
-	// resource advertised by a device plugin: a time-sliced/MPS whole-GPU
-	// resource (oversubscription) or a hardware partition such as a MIG
-	// profile.
-	gpuSharingModeDevicePlugin = "device-plugin"
+	gpuSharingModeDevicePlugin   = "device-plugin"
 
 	gpuSharingProbeContainer = "prober"
 	gpuSharingProbeImage     = "ubuntu:22.04"
@@ -47,17 +39,10 @@ const (
 	gpuSharingCompletedMarker  = "GPU_SHARING: COMPLETED"
 )
 
-// Kinds of sharing a device-plugin resource provides.
 const (
-	// gpuSharingKindSoftware: a whole-GPU resource oversubscribed by software
-	// (time-slicing, MPS). Allocatable must exceed the physical GPU count.
-	gpuSharingKindSoftware = "software"
-	// gpuSharingKindPartition: a hardware partition (e.g. MIG) exposed as its
-	// own schedulable resource.
+	gpuSharingKindSoftware  = "software"
 	gpuSharingKindPartition = "partition"
-	// gpuSharingKindUnknown: the user named the resource and the node carries
-	// no labels describing how it is shared.
-	gpuSharingKindUnknown = "unknown"
+	gpuSharingKindUnknown   = "unknown"
 )
 
 var (
@@ -81,9 +66,6 @@ func init() {
 		"Timeout for the GPU sharing Pods to all be Running at the same time, and for each Pod's GPU probe to complete.")
 }
 
-// gpuSharingVendorConfig holds the vendor-specific pieces of the GPU sharing
-// test. It is kept separate from AcceleratorConfig so this test owns its own
-// configuration.
 type gpuSharingVendorConfig struct {
 	// probeScript runs in each Pod and prints the GPU_SHARING lines parsed
 	// by parseGPUSharingProbeLogs: one PHYSICAL_ID per visible physical GPU,
@@ -114,11 +96,8 @@ var gpuSharingVendorConfigs = map[string]gpuSharingVendorConfig{
 		physicalCountLabel:   "nvidia.com/gpu.count",
 		wholeResourceSharing: nvidiaWholeGPUSharing,
 	},
-	// Add other vendors here
 }
 
-// nvidiaWholeGPUSharing reads the NVIDIA GPU Feature Discovery labels that
-// describe how nvidia.com/gpu is shared on a node.
 func nvidiaWholeGPUSharing(labels map[string]string) (string, string, bool) {
 	if r, err := strconv.Atoi(labels["nvidia.com/gpu.replicas"]); err == nil && r > 1 {
 		return gpuSharingKindSoftware, fmt.Sprintf("nvidia.com/gpu.replicas=%d", r), true
@@ -140,9 +119,6 @@ func nvidiaWholeGPUSharing(labels map[string]string) (string, string, bool) {
 // nvidia-smi under /usr/local/nvidia/bin).
 var gpuSharingToolDirs = []string{"/usr/local/nvidia/bin", "/usr/local/bin", "/usr/bin", "/bin"}
 
-// nvidiaGPUSharingProbeScript reports the GPU UUID (physical) and, for MIG
-// devices, the MIG UUID (logical) the Pod sees, and runs nvidia-smi as the
-// health check.
 var nvidiaGPUSharingProbeScript = `export PATH="$PATH:` + strings.Join(gpuSharingToolDirs, ":") + `"
 health=PASS
 if ! command -v nvidia-smi >/dev/null 2>&1; then
@@ -166,7 +142,6 @@ fi
 echo "` + gpuSharingHealthPrefix + `$health"
 echo "` + gpuSharingCompletedMarker + `"`
 
-// gpuSharingProbeResult is what one Pod observed about its GPU.
 type gpuSharingProbeResult struct {
 	PhysicalIDs []string
 	LogicalIDs  []string
@@ -176,8 +151,6 @@ type gpuSharingProbeResult struct {
 	RawLogs     string
 }
 
-// PhysicalID returns the single physical GPU the Pod sees, or an error if it
-// sees none or more than one (each Pod requests one shared unit).
 func (r gpuSharingProbeResult) PhysicalID() (string, error) {
 	if len(r.PhysicalIDs) != 1 {
 		return "", fmt.Errorf("expected exactly one visible physical GPU, found %d (%v)", len(r.PhysicalIDs), r.PhysicalIDs)
@@ -185,8 +158,6 @@ func (r gpuSharingProbeResult) PhysicalID() (string, error) {
 	return r.PhysicalIDs[0], nil
 }
 
-// LogicalID returns the partition the Pod sees, or its physical GPU when the
-// Pod is not given a partition.
 func (r gpuSharingProbeResult) LogicalID() string {
 	if len(r.LogicalIDs) > 0 {
 		return strings.Join(r.LogicalIDs, ",")
@@ -218,27 +189,19 @@ func parseGPUSharingProbeLogs(logs string) gpuSharingProbeResult {
 	return res
 }
 
-// gpuSharingPlan describes how the test will exercise GPU sharing.
 type gpuSharingPlan struct {
 	mode string
 	// node is where the shared resource was found. In device-plugin mode
 	// every Pod is pinned to it so they compete for the same GPUs.
-	node string
-	// resource is the extended resource requested in device-plugin mode.
-	resource string
-	// kind is how the device-plugin resource is shared.
-	kind string
-	// reason explains why this mechanism was selected.
-	reason string
-	// allocatable is the node's allocatable units of resource.
-	allocatable int64
-	// physicalGPUs is the node's physical GPU count, 0 if unknown.
-	physicalGPUs int
+	node         string
+	resource     string
+	kind         string
+	reason       string
+	allocatable  int64
+	physicalGPUs int // 0 if unknown
 	pods         int
 }
 
-// resolveGPUSharingPlan picks the sharing mechanism to test. It returns
-// errNoGPUSharingMechanism when auto-detection finds nothing to test.
 func resolveGPUSharingPlan(ctx context.Context, c kubernetes.Interface, requestedMode, requestedResource string, requestedPods int, globalAllocationMode string, cfg AcceleratorConfig, vcfg gpuSharingVendorConfig, logf func(string, ...any)) (gpuSharingPlan, error) {
 	var plan gpuSharingPlan
 	var err error
@@ -273,9 +236,6 @@ func resolveGPUSharingPlan(ctx context.Context, c kubernetes.Interface, requeste
 	return plan, nil
 }
 
-// autoGPUSharingPlan follows -allocation-mode: DRA is tried unless the
-// device plugin was requested, and the device plugin unless DRA was
-// requested. Naming a resource selects the device plugin.
 func autoGPUSharingPlan(ctx context.Context, c kubernetes.Interface, requestedResource, globalAllocationMode string, cfg AcceleratorConfig, vcfg gpuSharingVendorConfig, logf func(string, ...any)) (gpuSharingPlan, error) {
 	if requestedResource != "" {
 		plan, err := devicePluginSharingPlan(ctx, c, requestedResource, cfg, vcfg)
@@ -315,10 +275,6 @@ func draSharedClaimPlan(ctx context.Context, c kubernetes.Interface, cfg Acceler
 	}, nil
 }
 
-// devicePluginSharingPlan finds a Ready, schedulable node that advertises a
-// shared or partitioned extended resource. When resourceName is empty the
-// resource is detected: a hardware partition resource, or the whole-GPU
-// resource on a node whose labels say it is shared.
 func devicePluginSharingPlan(ctx context.Context, c kubernetes.Interface, resourceName string, cfg AcceleratorConfig, vcfg gpuSharingVendorConfig) (gpuSharingPlan, error) {
 	usable, err := usableNodes(ctx, c)
 	if err != nil {
@@ -382,8 +338,6 @@ func devicePluginSharingPlan(ctx context.Context, c kubernetes.Interface, resour
 		vcfg.partitionResourcePrefixes, cfg.ExtendedResource)
 }
 
-// partitionResource returns the alphabetically first hardware partition
-// resource the node advertises.
 func partitionResource(node corev1.Node, vcfg gpuSharingVendorConfig) (string, bool) {
 	var found []string
 	for name, q := range node.Status.Allocatable {
@@ -418,7 +372,6 @@ func classifySharedResource(node corev1.Node, resourceName string, cfg Accelerat
 	return gpuSharingKindUnknown, fmt.Sprintf("-gpu-sharing-resource=%s", resourceName)
 }
 
-// physicalGPUCount reads the node's physical GPU count label, 0 if unknown.
 func physicalGPUCount(node corev1.Node, vcfg gpuSharingVendorConfig) int {
 	if vcfg.physicalCountLabel == "" {
 		return 0
@@ -430,10 +383,6 @@ func physicalGPUCount(node corev1.Node, vcfg gpuSharingVendorConfig) int {
 	return n
 }
 
-// gpuSharingPodCount decides how many concurrent Pods to run. In
-// device-plugin mode it defaults to one more Pod than there are physical
-// GPUs, so by the pigeonhole principle at least two Pods share a GPU even if
-// the device plugin spreads allocations across GPUs.
 func gpuSharingPodCount(requested int, plan gpuSharingPlan) (int, error) {
 	if requested < 0 || requested == 1 {
 		return 0, fmt.Errorf("-gpu-sharing-pods=%d: at least 2 Pods are needed to show sharing (or 0 for the default)", requested)
@@ -464,10 +413,6 @@ func gpuSharingPodCount(requested int, plan gpuSharingPlan) (int, error) {
 	return int(n), nil
 }
 
-// checkSharedResourceExposure verifies the device-plugin resource is exposed
-// as more schedulable units than whole GPUs. A software-shared whole-GPU
-// resource must be oversubscribed (allocatable > physical GPUs). A partition
-// resource is fractional by definition.
 func checkSharedResourceExposure(plan gpuSharingPlan) error {
 	if plan.mode != gpuSharingModeDevicePlugin {
 		return nil
@@ -482,20 +427,7 @@ func checkSharedResourceExposure(plan gpuSharingPlan) error {
 	return nil
 }
 
-// TestGPUSharing verifies the GPU Sharing requirement (KAR-0003): the
-// platform provides at least one GPU sharing mechanism, so several workloads
-// that do not need a full GPU can run concurrently on the same physical GPU.
-//
-// The test runs several Pods at the same time, each requesting one shared GPU
-// unit, and checks from inside each Pod which physical GPU it was given:
-//   - dra-shared-claim: all Pods reference one DRA ResourceClaim, so they
-//     must all see the same allocated GPU.
-//   - device-plugin: each Pod requests one unit of a shared extended resource
-//     (time-sliced/MPS whole GPUs, or hardware partitions such as MIG) on the
-//     same node, and at least two of them must see the same physical GPU.
-//
-// Each Pod also runs a vendor health check against its GPU. Accelerators
-// without a known probe are skipped (manual verification required).
+// TestGPUSharing verifies the GPU Sharing conformance requirement (KAR-0003).
 // Ref: https://github.com/kubernetes-sigs/ai-conformance/tree/main/kars/0003-gpu-sharing
 func TestGPUSharing(t *testing.T) {
 	if testing.Short() {
@@ -606,9 +538,6 @@ func TestGPUSharing(t *testing.T) {
 	})
 }
 
-// evaluateGPUSharing checks that concurrent Pods were given the same
-// physical GPU: all of them for a shared ResourceClaim, at least two for a
-// shared extended resource.
 func evaluateGPUSharing(plan gpuSharingPlan, podNames []string, results map[string]gpuSharingProbeResult) error {
 	byGPU := map[string][]string{}
 	for _, name := range podNames {
@@ -676,7 +605,6 @@ func buildSharedResourceClaim(ns string, cfg AcceleratorConfig) *resourcev1.Reso
 	}
 }
 
-// buildGPUSharingPod constructs (without creating) one GPU sharing Pod.
 func buildGPUSharingPod(ns, name string, plan gpuSharingPlan, cfg AcceleratorConfig, vcfg gpuSharingVendorConfig) *corev1.Pod {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -723,8 +651,6 @@ func buildGPUSharingPod(ns, name string, plan gpuSharingPlan, cfg AcceleratorCon
 	return pod
 }
 
-// verifySharedClaim checks that the shared ResourceClaim is allocated exactly
-// one device and reserved for every Pod.
 func verifySharedClaim(ctx context.Context, c kubernetes.Interface, ns string, podNames []string) error {
 	claim, err := c.ResourceV1().ResourceClaims(ns).Get(ctx, gpuSharingClaimName, metav1.GetOptions{})
 	if err != nil {
@@ -754,8 +680,6 @@ func verifySharedClaim(ctx context.Context, c kubernetes.Interface, ns string, p
 	return nil
 }
 
-// waitForGPUSharingProbe reads the probe container's logs until the
-// completion marker appears.
 func waitForGPUSharingProbe(ctx context.Context, c kubernetes.Interface, ns, podName string, timeout time.Duration) (string, error) {
 	var logs string
 	var lastAPIError error
@@ -776,9 +700,6 @@ func waitForGPUSharingProbe(ctx context.Context, c kubernetes.Interface, ns, pod
 	return logs, nil
 }
 
-// describePodsNotRunning reports the phase and scheduling condition of each
-// Pod that is not Running, e.g. "0/1 nodes are available: 1 Insufficient
-// nvidia.com/gpu" when the GPU is not actually shared.
 func describePodsNotRunning(ctx context.Context, c kubernetes.Interface, ns string, podNames []string) string {
 	var b strings.Builder
 	for _, name := range podNames {
