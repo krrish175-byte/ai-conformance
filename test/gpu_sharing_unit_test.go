@@ -16,9 +16,6 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-// Unit tests for TestGPUSharing. These run against a fake clientset and need
-// no cluster.
-
 func nvidiaGPUSharingConfig(t *testing.T) gpuSharingVendorConfig {
 	t.Helper()
 	vcfg, ok := gpuSharingVendorConfigs["nvidia"]
@@ -75,8 +72,6 @@ func TestParseGPUSharingProbeLogs(t *testing.T) {
 	})
 }
 
-// TestNVIDIAGPUSharingProbeScript runs the probe script against a fake
-// nvidia-smi placed first on PATH.
 func TestNVIDIAGPUSharingProbeScript(t *testing.T) {
 	vcfg := nvidiaGPUSharingConfig(t)
 
