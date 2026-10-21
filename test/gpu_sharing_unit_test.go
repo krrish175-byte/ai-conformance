@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -127,7 +128,7 @@ func TestNVIDIAGPUSharingProbeScript(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			fake := "#!/bin/sh\nif [ \"$1\" = \"-L\" ]; then\ncat <<'EOF'\n" + tt.listOutput + "\nEOF\nexit " +
-				itoa(tt.listExit) + "\nfi\nexit " + itoa(tt.fullExit) + "\n"
+				strconv.Itoa(tt.listExit) + "\nfi\nexit " + strconv.Itoa(tt.fullExit) + "\n"
 			if err := os.WriteFile(filepath.Join(dir, "nvidia-smi"), []byte(fake), 0o755); err != nil {
 				t.Fatalf("write fake nvidia-smi: %v", err)
 			}
@@ -549,10 +550,6 @@ func TestBuildGPUSharingPod(t *testing.T) {
 			t.Errorf("want a toleration for %s, got %+v", cfg.TaintKey, pod.Spec.Tolerations)
 		}
 	})
-}
-
-func itoa(n int) string {
-	return strings.TrimSpace(strings.Repeat(" ", 0) + string(rune('0'+n/10%10)) + string(rune('0'+n%10)))
 }
 
 func equalStrings(a, b []string) bool {
