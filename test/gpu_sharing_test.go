@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 )
@@ -83,6 +84,11 @@ type gpuSharingVendorConfig struct {
 	// wholeResourceSharing reports whether node labels say the whole-GPU
 	// extended resource is shared, and how.
 	wholeResourceSharing func(labels map[string]string) (kind, reason string, ok bool)
+	// draSharing is the opaque vendor config applied to the DRA ResourceClaim
+	// so the driver enforces sharing semantics. Without it some DRA drivers
+	// allocate an exclusive device per Pod and the claim passes vacuously on
+	// any DRA cluster regardless of whether GPU sharing is enabled.
+	draSharing *resourcev1.OpaqueDeviceConfiguration
 }
 
 var gpuSharingVendorConfigs = map[string]gpuSharingVendorConfig{
@@ -95,6 +101,13 @@ var gpuSharingVendorConfigs = map[string]gpuSharingVendorConfig{
 		// Published by NVIDIA GPU Feature Discovery.
 		physicalCountLabel:   "nvidia.com/gpu.count",
 		wholeResourceSharing: nvidiaWholeGPUSharing,
+		// Requests time-slicing from the NVIDIA DRA driver so the claim
+		// fails on platforms that have DRA but no GPU sharing configured,
+		// rather than allocating an exclusive device and passing vacuously.
+		draSharing: &resourcev1.OpaqueDeviceConfiguration{
+			Driver:     "gpu.nvidia.com",
+			Parameters: k8sruntime.RawExtension{Raw: []byte(`{"sharing":{"strategy":"TimeSlicing"}}`)},
+		},
 	},
 }
 
@@ -114,12 +127,21 @@ func nvidiaWholeGPUSharing(labels map[string]string) (string, string, bool) {
 	return "", "", false
 }
 
-// gpuSharingToolDirs are appended to PATH by the probe script: some platforms
-// mount vendor tools outside the image's default PATH (e.g. GKE mounts
-// nvidia-smi under /usr/local/nvidia/bin).
-var gpuSharingToolDirs = []string{"/usr/local/nvidia/bin", "/usr/local/bin", "/usr/bin", "/bin"}
+// nvidiaToolDirs are prepended to PATH by nvidiaToolEnvSetup: some platforms
+// mount nvidia-smi outside the image's default PATH (e.g. GKE uses
+// /usr/local/nvidia/bin).
+var nvidiaToolDirs = []string{"/usr/local/nvidia/bin", "/usr/local/bin", "/usr/bin", "/bin"}
 
-var nvidiaGPUSharingProbeScript = `export PATH="$PATH:` + strings.Join(gpuSharingToolDirs, ":") + `"
+// nvidiaToolEnvSetup extends PATH and LD_LIBRARY_PATH so that nvidia-smi and
+// the NVIDIA user-space libraries are reachable on platforms (e.g. GKE) that
+// install the driver stack outside the standard search paths. It is shared
+// between nvidiaGPUSharingProbeScript and nvidiaDriverProbeScript.
+var nvidiaToolEnvSetup = `export PATH="$PATH:` + strings.Join(nvidiaToolDirs, ":") + `"
+if [ -d /usr/local/nvidia/lib64 ]; then
+  export LD_LIBRARY_PATH="/usr/local/nvidia/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi`
+
+var nvidiaGPUSharingProbeScript = nvidiaToolEnvSetup + `
 health=PASS
 if ! command -v nvidia-smi >/dev/null 2>&1; then
   echo "` + gpuSharingErrorPrefix + `nvidia-smi not found in the container"
@@ -339,23 +361,26 @@ func devicePluginSharingPlan(ctx context.Context, c kubernetes.Interface, resour
 }
 
 func partitionResource(node corev1.Node, vcfg gpuSharingVendorConfig) (string, bool) {
-	var found []string
+	// Pick the partition resource with the most allocatable units so that
+	// concurrent test Pods can land on the same physical GPU. Alphabetical
+	// first would fail when a GPU has both a coarse profile (1 unit/GPU) and
+	// a fine profile (7 units/GPU) and the coarse name sorts first.
+	var best string
+	var bestQty int64
 	for name, q := range node.Status.Allocatable {
 		if q.IsZero() {
 			continue
 		}
 		for _, prefix := range vcfg.partitionResourcePrefixes {
 			if strings.HasPrefix(string(name), prefix) {
-				found = append(found, string(name))
+				if q.Value() > bestQty {
+					best, bestQty = string(name), q.Value()
+				}
 				break
 			}
 		}
 	}
-	if len(found) == 0 {
-		return "", false
-	}
-	sort.Strings(found)
-	return found[0], true
+	return best, best != ""
 }
 
 func classifySharedResource(node corev1.Node, resourceName string, cfg AcceleratorConfig, vcfg gpuSharingVendorConfig) (string, string) {
@@ -400,9 +425,17 @@ func gpuSharingPodCount(requested int, plan gpuSharingPlan) (int, error) {
 		}
 		return requested, nil
 	}
-	n := int64(2)
+	var n int64
 	if plan.physicalGPUs > 0 {
+		// One more than the physical GPU count so the pigeonhole principle
+		// forces at least two Pods onto the same GPU.
 		n = int64(plan.physicalGPUs) + 1
+	} else {
+		// Physical GPU count unknown: use all allocatable units. With the
+		// NVIDIA device plugin's distributed policy, only 2 Pods would
+		// spread across GPUs on a multi-GPU node; using the full allocatable
+		// count ensures at least two Pods end up on the same physical GPU.
+		n = plan.allocatable
 	}
 	if n > plan.allocatable {
 		n = plan.allocatable
@@ -477,7 +510,7 @@ func TestGPUSharing(t *testing.T) {
 	})
 
 	if plan.mode == gpuSharingModeDRASharedClaim {
-		if _, err := clientset.ResourceV1().ResourceClaims(namespace).Create(ctx, buildSharedResourceClaim(namespace, cfg), metav1.CreateOptions{}); err != nil {
+		if _, err := clientset.ResourceV1().ResourceClaims(namespace).Create(ctx, buildSharedResourceClaim(namespace, cfg, vcfg), metav1.CreateOptions{}); err != nil {
 			t.Fatalf("Failed to create shared ResourceClaim: %v", err)
 		}
 	}
@@ -588,8 +621,8 @@ func evaluateGPUSharing(plan gpuSharingPlan, podNames []string, results map[stri
 	return nil
 }
 
-func buildSharedResourceClaim(ns string, cfg AcceleratorConfig) *resourcev1.ResourceClaim {
-	return &resourcev1.ResourceClaim{
+func buildSharedResourceClaim(ns string, cfg AcceleratorConfig, vcfg gpuSharingVendorConfig) *resourcev1.ResourceClaim {
+	claim := &resourcev1.ResourceClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: gpuSharingClaimName, Namespace: ns},
 		Spec: resourcev1.ResourceClaimSpec{
 			Devices: resourcev1.DeviceClaim{
@@ -603,6 +636,12 @@ func buildSharedResourceClaim(ns string, cfg AcceleratorConfig) *resourcev1.Reso
 			},
 		},
 	}
+	if vcfg.draSharing != nil {
+		claim.Spec.Devices.Config = []resourcev1.DeviceClaimConfiguration{{
+			DeviceConfiguration: resourcev1.DeviceConfiguration{Opaque: vcfg.draSharing},
+		}}
+	}
+	return claim
 }
 
 func buildGPUSharingPod(ns, name string, plan gpuSharingPlan, cfg AcceleratorConfig, vcfg gpuSharingVendorConfig) *corev1.Pod {

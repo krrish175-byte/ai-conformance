@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -137,10 +138,10 @@ func TestNVIDIAGPUSharingProbeScript(t *testing.T) {
 			if !r.Completed {
 				t.Fatalf("probe did not complete:\n%s", out)
 			}
-			if !equalStrings(r.PhysicalIDs, tt.wantPhysical) {
+			if !slices.Equal(r.PhysicalIDs, tt.wantPhysical) {
 				t.Errorf("physical IDs = %v, want %v\n%s", r.PhysicalIDs, tt.wantPhysical, out)
 			}
-			if !equalStrings(r.LogicalIDs, tt.wantLogical) {
+			if !slices.Equal(r.LogicalIDs, tt.wantLogical) {
 				t.Errorf("logical IDs = %v, want %v\n%s", r.LogicalIDs, tt.wantLogical, out)
 			}
 			if r.Healthy != tt.wantHealthy {
@@ -150,7 +151,7 @@ func TestNVIDIAGPUSharingProbeScript(t *testing.T) {
 	}
 
 	t.Run("missing nvidia-smi fails the health check", func(t *testing.T) {
-		for _, d := range gpuSharingToolDirs {
+		for _, d := range nvidiaToolDirs {
 			if _, err := os.Stat(filepath.Join(d, "nvidia-smi")); err == nil {
 				t.Skipf("host has nvidia-smi in %s", d)
 			}
@@ -239,7 +240,7 @@ func TestResolveGPUSharingPlan(t *testing.T) {
 			wantNode:     "mig-node",
 			wantResource: "nvidia.com/gpu",
 			wantKind:     gpuSharingKindPartition,
-			wantPods:     2,
+			wantPods:     7, // physicalGPUs unknown (no gpu.count label); use all allocatable
 		},
 		{
 			name:      "auto ignores an unshared whole-GPU resource",
@@ -359,7 +360,7 @@ func TestGPUSharingPodCount(t *testing.T) {
 		wantErr   bool
 	}{
 		{name: "DRA default", plan: gpuSharingPlan{mode: gpuSharingModeDRASharedClaim}, want: 2},
-		{name: "unknown physical count defaults to 2", plan: dp(4, 0), want: 2},
+		{name: "unknown physical count uses all allocatable units", plan: dp(4, 0), want: 4},
 		{name: "one more than the physical GPUs", plan: dp(32, 8), want: 9},
 		{name: "capped at allocatable", plan: dp(4, 8), want: 4},
 		{name: "allocatable below 2", plan: dp(1, 1), wantErr: true},
@@ -522,7 +523,7 @@ func TestBuildGPUSharingPod(t *testing.T) {
 		}
 		terms := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
 		if len(terms) != 1 || len(terms[0].MatchFields) != 1 || terms[0].MatchFields[0].Key != "metadata.name" ||
-			!equalStrings(terms[0].MatchFields[0].Values, []string{"node1"}) {
+			!slices.Equal(terms[0].MatchFields[0].Values, []string{"node1"}) {
 			t.Errorf("want required node affinity on metadata.name=node1, got %+v", terms)
 		}
 		if len(pod.Spec.ResourceClaims) != 0 {
@@ -547,14 +548,3 @@ func TestBuildGPUSharingPod(t *testing.T) {
 	})
 }
 
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
