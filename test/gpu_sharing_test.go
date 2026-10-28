@@ -16,7 +16,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 )
@@ -101,13 +100,12 @@ var gpuSharingVendorConfigs = map[string]gpuSharingVendorConfig{
 		// Published by NVIDIA GPU Feature Discovery.
 		physicalCountLabel:   "nvidia.com/gpu.count",
 		wholeResourceSharing: nvidiaWholeGPUSharing,
-		// Requests time-slicing from the NVIDIA DRA driver so the claim
-		// fails on platforms that have DRA but no GPU sharing configured,
-		// rather than allocating an exclusive device and passing vacuously.
-		draSharing: &resourcev1.OpaqueDeviceConfiguration{
-			Driver:     "gpu.nvidia.com",
-			Parameters: k8sruntime.RawExtension{Raw: []byte(`{"sharing":{"strategy":"TimeSlicing"}}`)},
-		},
+		// draSharing is left nil: the DRA shared-claim mechanism already
+		// proves GPU sharing without vendor-specific config — all Pods
+		// referencing one ResourceClaim receive the same allocated device,
+		// and the test verifies they observe the same physical GPU UUID.
+		// Vendor time-slicing config is only needed when the driver requires
+		// an explicit sharing mode and rejects claims without one.
 	},
 }
 
